@@ -8,19 +8,19 @@
       "Home": []
     },
     "serverInfo": {
-      "uptime": 889,
+      "uptime": 9902,
       "serverId": "",
       "playerCount": 0,
       "maxPlayers": 60
     },
-    "lastUpdated": "2025-12-22T22:59:32.020Z",
+    "lastUpdated": "2025-12-23T01:29:45.283Z",
     "lineup": {
-      "homeManager": "Dunkven",
-      "awayManager": "lewisseymour123",
+      "homeManager": "lewisseymour123",
+      "awayManager": "dunkven",
       "format": "7v7",
       "music": "1838673350",
-      "animation": "classic",
-      "setAt": "2025-12-22T21:20:04.643Z"
+      "animation": "worldcup",
+      "setAt": "2025-12-23T01:25:47.625Z"
     }
   }
 }
