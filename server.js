@@ -1,108 +1,19 @@
-// Enhanced Backend with Game Endpoints, Anti-DDOS, and Logging
+// GridSyncV1 Backend Server - COMPLETE WORKING VERSION
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs').promises;
 const path = require('path');
-const { WebhookClient } = require('discord.js');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== MIDDLEWARE =====
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// ===== ANTI-DDOS SYSTEM =====
-const rateLimitStore = new Map();
-const RATE_LIMIT_WINDOW = 60000;
-const MAX_REQUESTS_PER_WINDOW = 100;
-const BLACKLIST = new Set();
-
-function rateLimiter(req, res, next) {
-  const identifier = req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress;
-  if (BLACKLIST.has(identifier)) {
-    return res.status(429).json({ success: false, message: 'Rate limit exceeded. IP blocked.' });
-  }
-  const now = Date.now();
-  const record = rateLimitStore.get(identifier) || { count: 0, resetTime: now + RATE_LIMIT_WINDOW };
-  if (now > record.resetTime) {
-    record.count = 0;
-    record.resetTime = now + RATE_LIMIT_WINDOW;
-  }
-  record.count++;
-  rateLimitStore.set(identifier, record);
-  if (record.count > MAX_REQUESTS_PER_WINDOW) {
-    BLACKLIST.add(identifier);
-    setTimeout(() => BLACKLIST.delete(identifier), 900000);
-    return res.status(429).json({ success: false, message: 'Rate limit exceeded. Try again in 15 minutes.' });
-  }
-  res.setHeader('X-RateLimit-Limit', MAX_REQUESTS_PER_WINDOW);
-  res.setHeader('X-RateLimit-Remaining', MAX_REQUESTS_PER_WINDOW - record.count);
-  res.setHeader('X-RateLimit-Reset', record.resetTime);
-  next();
-}
-app.use(rateLimiter);
-
-// ===== LOGGING SYSTEM =====
+// Database paths
 const DB_DIR = path.join(__dirname, 'database');
-const LOGS_DIR = path.join(__dirname, 'logs');
-const COMMAND_LOGS_FILE = path.join(LOGS_DIR, 'command_logs.json');
-const ARCHIVED_LOGS_DIR = path.join(LOGS_DIR, 'archived');
-const LOG_WEBHOOK_URL = process.env.LOG_WEBHOOK_URL;
-let webhookClient = LOG_WEBHOOK_URL ? new WebhookClient({ url: LOG_WEBHOOK_URL }) : null;
-
-async function initLogging() {
-  await fs.mkdir(LOGS_DIR, { recursive: true });
-  await fs.mkdir(ARCHIVED_LOGS_DIR, { recursive: true });
-  try {
-    await fs.access(COMMAND_LOGS_FILE);
-  } catch {
-    await fs.writeFile(COMMAND_LOGS_FILE, JSON.stringify({ logs: [] }));
-  }
-  console.log('✅ Logging system initialized');
-}
-
-async function logCommand(apiKey, command, executor, target, details, success) {
-  const timestamp = new Date().toISOString();
-  const logEntry = { timestamp, apiKey, command, executor, target, details, success, id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}` };
-  try {
-    const data = await fs.readFile(COMMAND_LOGS_FILE, 'utf8');
-    const logs = JSON.parse(data);
-    logs.logs.push(logEntry);
-    if (logs.logs.length > 1000) {
-      await archiveLogs(logs.logs.slice(0, logs.logs.length - 1000));
-      logs.logs = logs.logs.slice(-1000);
-    }
-    await fs.writeFile(COMMAND_LOGS_FILE, JSON.stringify(logs, null, 2));
-    if (webhookClient) {
-      const embed = {
-        title: `Command: ${command}`,
-        color: success ? 0x2ECC71 : 0xE74C3C,
-        fields: [
-          { name: 'Executor', value: executor, inline: true },
-          { name: 'Target', value: target || 'N/A', inline: true },
-          { name: 'Status', value: success ? '✅ Success' : '❌ Failed', inline: true },
-          { name: 'Details', value: details || 'No details' }
-        ],
-        timestamp: new Date(),
-        footer: { text: `API Key: ${apiKey.substring(0, 10)}...` }
-      };
-      await webhookClient.send({ embeds: [embed] }).catch(console.error);
-    }
-    console.log(`📝 Logged: ${command} by ${executor}`);
-  } catch (error) {
-    console.error('❌ Error logging command:', error);
-  }
-}
-
-async function archiveLogs(oldLogs) {
-  const archiveFile = path.join(ARCHIVED_LOGS_DIR, `logs_${Date.now()}.json`);
-  await fs.writeFile(archiveFile, JSON.stringify({ logs: oldLogs }, null, 2));
-  console.log(`📦 Archived ${oldLogs.length} old logs`);
-}
-
-// ===== DATABASE =====
 const GAMES_DB = path.join(DB_DIR, 'games.json');
 const BANS_DB = path.join(DB_DIR, 'bans.json');
 const BLACKLIST_DB = path.join(DB_DIR, 'blacklist.json');
@@ -110,19 +21,26 @@ const WARNINGS_DB = path.join(DB_DIR, 'warnings.json');
 const GAME_STATE_DB = path.join(DB_DIR, 'gamestate.json');
 const ANTICHEAT_DB = path.join(DB_DIR, 'anticheat.json');
 
+// Initialize database
 async function initDB() {
-  await fs.mkdir(DB_DIR, { recursive: true });
-  const files = [GAMES_DB, BANS_DB, BLACKLIST_DB, WARNINGS_DB, GAME_STATE_DB, ANTICHEAT_DB];
-  for (const file of files) {
-    try {
-      await fs.access(file);
-    } catch {
-      await fs.writeFile(file, JSON.stringify({}));
+  try {
+    await fs.mkdir(DB_DIR, { recursive: true });
+    
+    const files = [GAMES_DB, BANS_DB, BLACKLIST_DB, WARNINGS_DB, GAME_STATE_DB, ANTICHEAT_DB];
+    for (const file of files) {
+      try {
+        await fs.access(file);
+      } catch {
+        await fs.writeFile(file, JSON.stringify({}));
+      }
     }
+    console.log('✅ Database initialized');
+  } catch (error) {
+    console.error('❌ Database init error:', error);
   }
-  console.log('✅ Database initialized');
 }
 
+// Helper functions
 async function readDB(file) {
   try {
     const data = await fs.readFile(file, 'utf8');
@@ -136,138 +54,444 @@ async function writeDB(file, data) {
   await fs.writeFile(file, JSON.stringify(data, null, 2));
 }
 
-// ===== API KEY MIDDLEWARE =====
+// Middleware to verify API key
 async function verifyAPIKey(req, res, next) {
   const apiKey = req.body.apiKey || req.query.apiKey || req.headers['x-api-key'];
-  if (!apiKey) return res.status(401).json({ success: false, message: 'No API key provided' });
+  
+  if (!apiKey) {
+    return res.status(401).json({ success: false, message: 'No API key provided' });
+  }
+  
   const games = await readDB(GAMES_DB);
-  if (!games[apiKey]) return res.status(403).json({ success: false, message: 'Invalid API key' });
+  if (!games[apiKey]) {
+    return res.status(403).json({ success: false, message: 'Invalid API key' });
+  }
+  
   req.apiKey = apiKey;
   req.gameData = games[apiKey];
   next();
 }
 
-// ===== BASIC ENDPOINTS =====
-app.get('/health', (req, res) => res.json({ status: 'ok', message: 'GridSyncV1 Backend running' }));
-app.get('/api/status', (req, res) => {
-  res.json({
-    status: 'online',
-    uptime: process.uptime(),
-    rateLimits: { activeConnections: rateLimitStore.size, blacklistedIPs: BLACKLIST.size },
+// ===== ROUTES =====
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', message: 'GridSyncV1 Backend is running' });
+});
+
+// Game registration
+app.post('/api/game/register', async (req, res) => {
+  const { gameName, ownerId, adminKey } = req.body;
+  
+  if (adminKey !== process.env.ADMIN_KEY) {
+    return res.status(403).json({ success: false, message: 'Invalid admin key' });
+  }
+  
+  const apiKey = generateAPIKey();
+  const games = await readDB(GAMES_DB);
+  
+  games[apiKey] = {
+    gameName,
+    ownerId,
+    createdAt: new Date().toISOString(),
+    isActive: true
+  };
+  
+  await writeDB(GAMES_DB, games);
+  
+  res.json({ success: true, apiKey, message: 'Game registered successfully' });
+});
+
+// Moderation - Kick
+app.post('/api/moderation/kick', verifyAPIKey, async (req, res) => {
+  const { player, kickedBy } = req.body;
+  
+  const gameState = await readDB(GAME_STATE_DB);
+  if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [] };
+  
+  gameState[req.apiKey].pendingActions.push({
+    type: 'kick',
+    player,
+    kickedBy,
     timestamp: new Date().toISOString()
+  });
+  
+  await writeDB(GAME_STATE_DB, gameState);
+  
+  res.json({ success: true, message: `Kick command queued for ${player}` });
+});
+
+// Moderation - Ban
+app.post('/api/moderation/ban', verifyAPIKey, async (req, res) => {
+  const { player, reason, duration, bannedBy, isTemp } = req.body;
+  
+  const bans = await readDB(BANS_DB);
+  const banKey = `${req.apiKey}:${player}`;
+  
+  const expiresAt = isTemp ? calculateExpiry(duration) : null;
+  
+  bans[banKey] = {
+    player,
+    gameId: req.apiKey,
+    reason,
+    bannedBy,
+    timestamp: new Date().toISOString(),
+    isPermanent: !isTemp,
+    expiresAt
+  };
+  
+  await writeDB(BANS_DB, bans);
+  
+  const gameState = await readDB(GAME_STATE_DB);
+  if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [] };
+  
+  gameState[req.apiKey].pendingActions.push({
+    type: 'kick',
+    player,
+    reason: 'Banned',
+    timestamp: new Date().toISOString()
+  });
+  
+  await writeDB(GAME_STATE_DB, gameState);
+  
+  res.json({ success: true, message: `${player} has been banned` });
+});
+
+// Moderation - Unban
+app.post('/api/moderation/unban', verifyAPIKey, async (req, res) => {
+  const { player } = req.body;
+  
+  const bans = await readDB(BANS_DB);
+  const banKey = `${req.apiKey}:${player}`;
+  
+  if (bans[banKey]) {
+    delete bans[banKey];
+    await writeDB(BANS_DB, bans);
+    res.json({ success: true, message: `${player} has been unbanned` });
+  } else {
+    res.json({ success: false, message: `${player} is not banned` });
+  }
+});
+
+// Moderation - Check Ban
+app.get('/api/moderation/checkban/:player', verifyAPIKey, async (req, res) => {
+  const player = req.params.player;
+  const bans = await readDB(BANS_DB);
+  const banKey = `${req.apiKey}:${player}`;
+  
+  const ban = bans[banKey];
+  
+  if (!ban) {
+    return res.json({ success: true, isBanned: false });
+  }
+  
+  if (!ban.isPermanent && ban.expiresAt) {
+    if (new Date(ban.expiresAt) < new Date()) {
+      delete bans[banKey];
+      await writeDB(BANS_DB, bans);
+      return res.json({ success: true, isBanned: false });
+    }
+  }
+  
+  res.json({ success: true, isBanned: true, ban });
+});
+
+// Moderation - Warn
+app.post('/api/moderation/warn', verifyAPIKey, async (req, res) => {
+  const { player, reason, warnedBy, warnedByRole } = req.body;
+  
+  const warnings = await readDB(WARNINGS_DB);
+  const warnKey = `${req.apiKey}:${player}:${Date.now()}`;
+  
+  warnings[warnKey] = {
+    player,
+    gameId: req.apiKey,
+    reason,
+    warnedBy,
+    warnedByRole,
+    timestamp: new Date().toISOString()
+  };
+  
+  await writeDB(WARNINGS_DB, warnings);
+  
+  const gameState = await readDB(GAME_STATE_DB);
+  if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [] };
+  
+  gameState[req.apiKey].pendingActions.push({
+    type: 'warn',
+    player,
+    reason,
+    warnedBy,
+    warnedByRole,
+    timestamp: new Date().toISOString()
+  });
+  
+  await writeDB(GAME_STATE_DB, gameState);
+  
+  res.json({ success: true, message: `Warning sent to ${player}` });
+});
+
+// Team Management
+app.post('/api/teams/manage', verifyAPIKey, async (req, res) => {
+  const { team, player, action } = req.body;
+  
+  const gameState = await readDB(GAME_STATE_DB);
+  if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [], teams: { home: [], away: [], fans: [] } };
+  
+  gameState[req.apiKey].pendingActions.push({
+    type: 'teamManage',
+    team,
+    player,
+    action,
+    timestamp: new Date().toISOString()
+  });
+  
+  await writeDB(GAME_STATE_DB, gameState);
+  
+  res.json({ success: true, message: 'Team management command queued' });
+});
+
+app.post('/api/teams/clear', verifyAPIKey, async (req, res) => {
+  const gameState = await readDB(GAME_STATE_DB);
+  if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [] };
+  
+  gameState[req.apiKey].pendingActions.push({
+    type: 'clearTeams',
+    timestamp: new Date().toISOString()
+  });
+  
+  await writeDB(GAME_STATE_DB, gameState);
+  
+  res.json({ success: true, message: 'Clear teams command queued' });
+});
+
+app.get('/api/teams/list', verifyAPIKey, async (req, res) => {
+  const gameState = await readDB(GAME_STATE_DB);
+  const teams = gameState[req.apiKey]?.teams || { home: [], away: [], fans: [] };
+  
+  res.json({ 
+    success: true, 
+    data: {
+      homeTeam: teams.home,
+      awayTeam: teams.away,
+      fans: teams.fans
+    }
   });
 });
 
-// ===== LOGS ENDPOINTS =====
-app.get('/api/logs', async (req, res) => {
-  try {
-    const apiKey = req.query.apiKey || req.headers['x-api-key'];
-    const limit = parseInt(req.query.limit) || 50;
-    const data = await fs.readFile(COMMAND_LOGS_FILE, 'utf8');
-    const logs = JSON.parse(data);
-    const filteredLogs = logs.logs.filter(log => log.apiKey === apiKey).slice(-limit).reverse();
-    res.json({ success: true, logs: filteredLogs });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error fetching logs' });
+// Blacklist
+app.post('/api/blacklist/add', verifyAPIKey, async (req, res) => {
+  const { player, managedBy } = req.body;
+  
+  const blacklist = await readDB(BLACKLIST_DB);
+  const key = `${req.apiKey}:${player}`;
+  
+  blacklist[key] = {
+    player,
+    gameId: req.apiKey,
+    addedBy: managedBy,
+    timestamp: new Date().toISOString()
+  };
+  
+  await writeDB(BLACKLIST_DB, blacklist);
+  
+  res.json({ success: true, message: `${player} added to blacklist` });
+});
+
+app.post('/api/blacklist/remove', verifyAPIKey, async (req, res) => {
+  const { player } = req.body;
+  
+  const blacklist = await readDB(BLACKLIST_DB);
+  const key = `${req.apiKey}:${player}`;
+  
+  if (blacklist[key]) {
+    delete blacklist[key];
+    await writeDB(BLACKLIST_DB, blacklist);
+    res.json({ success: true, message: `${player} removed from blacklist` });
+  } else {
+    res.json({ success: false, message: `${player} not in blacklist` });
   }
 });
 
-app.post('/api/logs/clear', async (req, res) => {
-  const { adminKey } = req.body;
-  if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ success: false, message: 'Unauthorized' });
-  try {
-    const data = await fs.readFile(COMMAND_LOGS_FILE, 'utf8');
-    const logs = JSON.parse(data);
-    await archiveLogs(logs.logs);
-    await fs.writeFile(COMMAND_LOGS_FILE, JSON.stringify({ logs: [] }));
-    res.json({ success: true, message: 'Logs cleared and archived' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error clearing logs' });
-  }
+app.post('/api/blacklist/check', verifyAPIKey, async (req, res) => {
+  const { player } = req.body;
+  
+  const blacklist = await readDB(BLACKLIST_DB);
+  const key = `${req.apiKey}:${player}`;
+  
+  res.json({ success: true, isBlacklisted: !!blacklist[key] });
 });
 
-// ===== GAME ENDPOINTS =====
+app.post('/api/blacklist/list', verifyAPIKey, async (req, res) => {
+  const blacklist = await readDB(BLACKLIST_DB);
+  const players = Object.values(blacklist)
+    .filter(b => b.gameId === req.apiKey)
+    .map(b => b.player);
+  
+  res.json({ success: true, players });
+});
+
+app.get('/api/blacklist/check/:player', verifyAPIKey, async (req, res) => {
+  const player = req.params.player;
+  const blacklist = await readDB(BLACKLIST_DB);
+  const key = `${req.apiKey}:${player}`;
+  
+  res.json({ success: true, isBlacklisted: !!blacklist[key] });
+});
+
+// Lineup
+app.post('/api/lineup/set', verifyAPIKey, async (req, res) => {
+  const { homeManager, awayManager, format, music, animation } = req.body;
+  
+  const gameState = await readDB(GAME_STATE_DB);
+  if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [] };
+  
+  gameState[req.apiKey].lineup = {
+    homeManager,
+    awayManager,
+    format,
+    music,
+    animation,
+    setAt: new Date().toISOString()
+  };
+  
+  gameState[req.apiKey].pendingActions.push({
+    type: 'setLineup',
+    homeManager,
+    awayManager,
+    format,
+    music,
+    animation,
+    timestamp: new Date().toISOString()
+  });
+  
+  await writeDB(GAME_STATE_DB, gameState);
+  
+  res.json({ success: true, message: 'Lineup configured successfully' });
+});
+
+// Game state
+app.post('/api/game/update', verifyAPIKey, async (req, res) => {
+  const { players, teams, serverInfo } = req.body;
+  
+  const gameState = await readDB(GAME_STATE_DB);
+  if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [] };
+  
+  gameState[req.apiKey].currentPlayers = players || [];
+  gameState[req.apiKey].teams = teams || { home: [], away: [], fans: [] };
+  gameState[req.apiKey].serverInfo = serverInfo || {};
+  gameState[req.apiKey].lastUpdated = new Date().toISOString();
+  
+  await writeDB(GAME_STATE_DB, gameState);
+  
+  res.json({ success: true });
+});
+
+app.get('/api/game/poll', verifyAPIKey, async (req, res) => {
+  const gameState = await readDB(GAME_STATE_DB);
+  const actions = gameState[req.apiKey]?.pendingActions || [];
+  
+  if (gameState[req.apiKey]) {
+    gameState[req.apiKey].pendingActions = [];
+    await writeDB(GAME_STATE_DB, gameState);
+  }
+  
+  res.json({ success: true, actions });
+});
+
 app.get('/api/game/players', verifyAPIKey, async (req, res) => {
-  try {
-    const gameState = await readDB(GAME_STATE_DB);
-    const players = gameState[req.apiKey]?.currentPlayers || [];
-    res.json({ success: true, players });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error fetching players', error: error.message });
-  }
+  const gameState = await readDB(GAME_STATE_DB);
+  const players = gameState[req.apiKey]?.currentPlayers || [];
+  
+  res.json({ success: true, players });
 });
 
 app.get('/api/game/info', verifyAPIKey, async (req, res) => {
-  try {
-    const gameState = await readDB(GAME_STATE_DB);
-    const state = gameState[req.apiKey] || {};
-    res.json({ success: true, info: state });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error fetching game info', error: error.message });
-  }
+  const gameState = await readDB(GAME_STATE_DB);
+  const info = gameState[req.apiKey]?.serverInfo || {
+    playerCount: 0,
+    maxPlayers: 0,
+    serverId: "Not connected",
+    uptime: "0s"
+  };
+  
+  res.json({ success: true, data: info });
 });
 
-app.get('/api/game/actions', verifyAPIKey, async (req, res) => {
-  try {
-    const gameState = await readDB(GAME_STATE_DB);
-    const actions = gameState[req.apiKey]?.pendingActions || [];
-    res.json({ success: true, actions });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error fetching actions', error: error.message });
+// Anti-cheat
+app.post('/api/anticheat/report', verifyAPIKey, async (req, res) => {
+  const { player, violation, details } = req.body;
+  
+  const anticheat = await readDB(ANTICHEAT_DB);
+  if (!anticheat[req.apiKey]) anticheat[req.apiKey] = { logs: [] };
+  
+  anticheat[req.apiKey].logs.push({
+    player,
+    violation,
+    details,
+    timestamp: new Date().toISOString()
+  });
+  
+  if (anticheat[req.apiKey].logs.length > 100) {
+    anticheat[req.apiKey].logs = anticheat[req.apiKey].logs.slice(-100);
   }
+  
+  await writeDB(ANTICHEAT_DB, anticheat);
+  
+  res.json({ success: true });
 });
 
-// ===== MODERATION EXAMPLES =====
-app.post('/api/moderation/kick', verifyAPIKey, async (req, res) => {
-  const { player, kickedBy } = req.body;
-  try {
-    const gameState = await readDB(GAME_STATE_DB);
-    if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [] };
-    gameState[req.apiKey].pendingActions.push({ type: 'kick', player, kickedBy, timestamp: new Date().toISOString() });
-    await writeDB(GAME_STATE_DB, gameState);
-    await logCommand(req.apiKey, 'kick', kickedBy, player, 'Player kicked', true);
-    res.json({ success: true, message: `Kick queued for ${player}` });
-  } catch (error) {
-    await logCommand(req.apiKey, 'kick', kickedBy, player, `Error: ${error.message}`, false);
-    res.status(500).json({ success: false, message: 'Error processing kick' });
-  }
+app.get('/api/anticheat/status', verifyAPIKey, async (req, res) => {
+  const anticheat = await readDB(ANTICHEAT_DB);
+  const logs = anticheat[req.apiKey]?.logs || [];
+  
+  const today = new Date().toDateString();
+  const todayViolations = logs.filter(l => new Date(l.timestamp).toDateString() === today).length;
+  
+  res.json({ 
+    success: true, 
+    enabled: true,
+    violations: todayViolations
+  });
 });
 
-app.post('/api/moderation/ban', verifyAPIKey, async (req, res) => {
-  const { player, reason, duration, bannedBy, isTemp } = req.body;
-  try {
-    const bans = await readDB(BANS_DB);
-    const banKey = `${req.apiKey}:${player}`;
-    const expiresAt = isTemp ? calculateExpiry(duration) : null;
-    bans[banKey] = { player, gameId: req.apiKey, reason, bannedBy, timestamp: new Date().toISOString(), isPermanent: !isTemp, expiresAt };
-    await writeDB(BANS_DB, bans);
-    const gameState = await readDB(GAME_STATE_DB);
-    if (!gameState[req.apiKey]) gameState[req.apiKey] = { pendingActions: [] };
-    gameState[req.apiKey].pendingActions.push({ type: 'kick', player, reason: 'Banned', timestamp: new Date().toISOString() });
-    await writeDB(GAME_STATE_DB, gameState);
-    await logCommand(req.apiKey, isTemp ? 'tempban' : 'ban', bannedBy, player, `Reason: ${reason}${isTemp ? ` | Duration: ${duration}` : ''}`, true);
-    res.json({ success: true, message: `${player} banned` });
-  } catch (error) {
-    await logCommand(req.apiKey, 'ban', bannedBy, player, `Error: ${error.message}`, false);
-    res.status(500).json({ success: false, message: 'Error processing ban' });
-  }
+app.get('/api/anticheat/logs', verifyAPIKey, async (req, res) => {
+  const anticheat = await readDB(ANTICHEAT_DB);
+  const logs = anticheat[req.apiKey]?.logs || [];
+  
+  const recentLogs = logs.slice(-20).reverse().map(l => ({
+    player: l.player,
+    violation: l.violation,
+    time: new Date(l.timestamp).toLocaleString()
+  }));
+  
+  res.json({ success: true, logs: recentLogs });
 });
 
-// ===== HELPERS =====
+// Helper functions
+function generateAPIKey() {
+  return 'GS_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+}
+
 function calculateExpiry(duration) {
   const now = new Date();
   const match = duration.match(/^(\d+)([mhd])$/);
+  
   if (!match) return null;
+  
   const [, amount, unit] = match;
-  const ms = { m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000 }[unit];
-  return new Date(now.getTime() + parseInt(amount) * ms).toISOString();
+  const ms = {
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000
+  }[unit];
+  
+  return new Date(now.getTime() + (parseInt(amount) * ms)).toISOString();
 }
 
-// ===== START SERVER =====
-Promise.all([initDB(), initLogging()]).then(() => {
+// Start server
+initDB().then(() => {
   app.listen(PORT, () => {
     console.log(`✅ GridSyncV1 Backend running on port ${PORT}`);
-    console.log(`🛡️ Anti-DDOS protection active`);
-    console.log(`📝 Command logging enabled`);
   });
 });
